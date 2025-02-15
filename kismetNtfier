@@ -1,0 +1,75 @@
+import json
+import websocket
+import requests
+import time
+
+# Kismet WebSocket URL
+KISMET_WS_URL = "ws://localhost:2501/eventbus/events.ws?user=kismet&password=kismet"
+
+# Ntfy server endpoint
+NTFY_URL = "http://ntfy.sh/yourTopic"
+
+def send_alert(alert_text):
+    """Send alert data to ntfy server."""
+    try:
+        response = requests.post(NTFY_URL, data=alert_text.encode("utf-8"))
+        print("[+] Alert sent:", alert_text, "| Response:", response.text)
+    except requests.exceptions.RequestException as e:
+        print("[-] Failed to send alert:", e)
+
+def on_message(ws, message):
+    """Handles incoming messages from Kismet."""
+    try:
+        data = json.loads(message)
+        if "ALERT" in data:
+            alert_data = data["ALERT"]
+            if "kismet.alert.text" in alert_data and "kismet.alert.source_mac" in alert_data:
+                alert_text = alert_data["kismet.alert.text"]
+                source_mac = alert_data["kismet.alert.source_mac"]
+                print(f"[ALERT] {alert_text} from {source_mac}")
+                send_alert(alert_text)
+    except json.JSONDecodeError:
+        print("[-] Received malformed JSON")
+
+def on_error(ws, error):
+    """Handles WebSocket errors."""
+    print("[-] WebSocket error:", error)
+
+def on_close(ws, close_status_code, close_msg):
+    """Handles WebSocket closure."""
+    print("[-] Connection closed, attempting to reconnect...")
+
+def on_open(ws):
+    """Subscribe to Kismet alerts when connection opens."""
+    req = {"SUBSCRIBE": "ALERT"}
+    ws.send(json.dumps(req))
+    print("[+] Subscribed to Kismet alerts.")
+
+def wait_for_internet():
+    """Wait until internet connection is restored."""
+    while True:
+        try:
+            requests.get("https://www.google.com", timeout=5)
+            print("[+] Internet restored, reconnecting...")
+            return
+        except requests.ConnectionError:
+            print("[-] No internet, retrying in 5 seconds...")
+            time.sleep(5)
+
+def connect_to_kismet():
+    """Continuously attempt to connect to Kismet WebSocket."""
+    while True:
+        try:
+            print("[+] Connecting to Kismet...")
+            ws = websocket.WebSocketApp(KISMET_WS_URL,
+                                        on_message=on_message,
+                                        on_error=on_error,
+                                        on_close=on_close)
+            ws.on_open = on_open
+            ws.run_forever()
+        except Exception as e:
+            print(f"[-] WebSocket connection failed: {e}")
+            wait_for_internet()  # Wait for the internet before retrying
+
+if __name__ == "__main__":
+    connect_to_kismet()
